@@ -1,3 +1,6 @@
+ambiente-intencao-dialogar/
+*/wandb/
+*/artifacts/
 *.log
 
 # Byte-compiled / optimized / DLL files
