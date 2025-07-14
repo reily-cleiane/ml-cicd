@@ -1,6 +1,7 @@
 import pandas as pd
 import string
 import nltk
+import cloudpickle
 import numpy as np
 from sklearn.model_selection import GridSearchCV
 from sklearn.pipeline import Pipeline
@@ -13,25 +14,27 @@ from sklearn.svm import LinearSVC
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.metrics import accuracy_score, make_scorer
 from sentence_transformers import SentenceTransformer
-from xgboost import XGBClassifier
-from nltk.corpus import stopwords
-from sklearn.preprocessing import LabelEncoder
 from nltk.corpus import stopwords
 import string
 from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import classification_report, confusion_matrix
 import seaborn as sns
-import matplotlib.pyplot as plt
 import numpy as np
 import os
 from sklearn.model_selection import StratifiedKFold
 from sklearn.model_selection import cross_val_predict
 import wandb
-import joblib
 
 # ----------- Pré-processador seguro para GridSearchCV -----------
 class TextPreprocessor(BaseEstimator, TransformerMixin):
+    def __init__(self):
+        # Faz o download silencioso das stopwords, se ainda não tiver
+        try:
+            _ = stopwords.words('portuguese')
+        except LookupError:
+            nltk.download('stopwords', quiet=True)
+        self.stop_words = set(stopwords.words('portuguese'))
+
     def fit(self, X, y=None):
         return self
 
@@ -70,7 +73,6 @@ def gerar_params_grid_tfidf():
     nb = MultinomialNB()
     rf = RandomForestClassifier()
     svc = CalibratedClassifierCV(LinearSVC())
-    xgb = XGBClassifier(use_label_encoder=False, eval_metric='mlogloss')
     pipeline_tfidf = Pipeline([
         ('prep', TextPreprocessor()),
         ('vect', TfidfVectorizer()),
@@ -105,20 +107,11 @@ def gerar_params_grid_tfidf():
             'vect__min_df': [1],
             'clf': [svc],
         },
-        {
-            'vect__ngram_range': [(1, 1), (1, 2)],
-            'vect__max_df': [1.0,0.8],
-            'vect__min_df': [1],
-            'clf': [xgb],
-            'clf__n_estimators': [100],
-            'clf__max_depth': [3, 5]
-        }
     ]
     return param_grids_tfidf, pipeline_tfidf
 
 def gerar_params_grid_embeddings():
     logreg = LogisticRegression(max_iter=1000,class_weight='balanced')
-    xgb = XGBClassifier(use_label_encoder=False, eval_metric='mlogloss')
 
     pipeline_embeddings = Pipeline([
         ('prep', TextPreprocessor()),
@@ -133,13 +126,6 @@ def gerar_params_grid_embeddings():
             'clf': [logreg],
             'clf__C': [1.0, 5.0, 10.0],
         },
-        {
-            'vect__model_name': ['Alibaba-NLP/gte-multilingual-base'],
-            'vect__trust_remote_code': [True],
-            'clf': [xgb],
-            'clf__n_estimators': [100],
-            'clf__max_depth': [3],
-        }
     ]
     return param_grids_embeddings, pipeline_embeddings
 
@@ -167,21 +153,13 @@ def rodar_grid_search(pipeline, param_grids, X, y):
 
     return classificadores
 
-def gerar_metricas_classificador(classificador, X, y, label_encoder):
+def gerar_metricas_classificador(classificador, X, y):
     
     cv_strategy = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
     y_pred = cross_val_predict(classificador, X, y, cv=cv_strategy, n_jobs=1)
 
     # Relatório e matriz de confusão
     report = classification_report(y, y_pred, output_dict=True, zero_division=0)
-
-    # Decodifica y e y_pred para os nomes originais
-    y_true_named = label_encoder.inverse_transform(y)
-    y_pred_named = label_encoder.inverse_transform(y_pred)
-
-    # Gera a matriz com os rótulos originais
-    labels = label_encoder.classes_
-    cm = confusion_matrix(y_true_named, y_pred_named, labels=labels)
     
     f1 = round(report['macro avg']['f1-score'], 4)
     acuracia = round(report['accuracy'], 4)
@@ -212,15 +190,16 @@ def retornar_melhor_classificador(classificadores, metricas):
 
 def logar_melhor_classificador(classificador,metricas, run):
     run.log(metricas)
-    joblib.dump(classificador, 'classificador.pkl')
+    with open("modelo_completo.pkl", "wb") as f:
+        cloudpickle.dump(classificador[1], f)
 
     artifact = wandb.Artifact('modelo', type='modelo')
-    artifact.add_file('classificador.pkl')
+    artifact.add_file('modelo_completo.pkl')
     run.log_artifact(artifact)
 
     if metricas['f1-macro'] >= 0.82 and metricas['acuracia'] >= 0.85:
         artifact = wandb.Artifact('classificador', type='modelo')
-        artifact.add_file('classificador.pkl')
+        artifact.add_file('modelo_completo.pkl')
         run.log_artifact(artifact)
   
 
@@ -236,7 +215,6 @@ def logar_metricas_classificadores(metricas, run):
     run.log({"tabela_classificadores": tabela})
 
 def main():
-    nltk.download('stopwords')
     wandb.init(
         project="intencao-dialogar",
         job_type="selecao-modelo",
@@ -246,14 +224,12 @@ def main():
 
     X = df['texto']
     y = df['tipo']
-    le = LabelEncoder()
-    y_encoded = le.fit_transform(y)
 
     grid_tfidf, pipeline_tfidf = gerar_params_grid_tfidf()
     grid_embeddings, pipeline_embeddings = gerar_params_grid_embeddings()
     
-    classificadores_tfidf = rodar_grid_search(pipeline_tfidf, grid_tfidf, X, y_encoded)
-    classificadores_embeddings = rodar_grid_search(pipeline_embeddings, grid_embeddings, X, y_encoded)
+    classificadores_tfidf = rodar_grid_search(pipeline_tfidf, grid_tfidf, X, y)
+    classificadores_embeddings = rodar_grid_search(pipeline_embeddings, grid_embeddings, X, y)
 
     #cleaned_params = lambda params: { k.replace('clf__', '').replace('vect__', ''): v for k, v in params.items() if 'clf__' in k or 'vect__' in k}
 
@@ -262,7 +238,7 @@ def main():
             classificador=nome_classificador,
             vetorizador='TF-IDF',
             params=str(param),
-            **gerar_metricas_classificador(classificador, X, y_encoded, le)
+            **gerar_metricas_classificador(classificador, X, y)
         )
         for nome_classificador, classificador, param in classificadores_tfidf
     ]
@@ -272,7 +248,7 @@ def main():
             classificador=nome_classificador,
             vetorizador='Embeddings',
             params=str(param),
-            **gerar_metricas_classificador(classificador, X, y_encoded, le)
+            **gerar_metricas_classificador(classificador, X, y)
         )
         for nome_classificador, classificador, param in classificadores_embeddings
     ]

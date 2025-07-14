@@ -12,3 +12,4 @@ seaborn
 xgboost
 sentence-transformers
 joblib
+cloudpickle
