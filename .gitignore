@@ -2,6 +2,7 @@ ambiente-intencao-dialogar/
 *wandb/
 *artifacts/
 *.log
+*.pkl
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
