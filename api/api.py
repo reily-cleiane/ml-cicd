@@ -1,47 +1,35 @@
-print('Preparando ambiente')
-print('-- carregando as bibliotecas')
-
 from fastapi import FastAPI, Query
 import cloudpickle
 import os
 import pandas as pd
 import wandb
+from pydantic import BaseModel
 
-# AFAZER: ver se precisa dessas linhas abaixo. Elas servem pra usar a pasta do wandb
-#         no mesmo lugar que o pipeline usa. Se não colocar, vai criar a pasta wandb e a artifacts
-#         no diretório que o script de inicialização da API for executado
-import os
-os.environ["WANDB_DIR"] = "/pipeline-machine-learning"
-os.environ["WANDB_CACHE_DIR"] = "/pipeline-machine-learning/artifacts"
-
+os.environ["WANDB_CACHE_DIR"] = "./.wandb_cache"
 wandb.init(
     project="intencao-dialogar",
-    job_type="selecao-modelo",
+    job_type="execucao-api",
 )
+# classificador = None
 
-# AFAZER: considere remover esse condicional. Precisei colocar para poder rodar o modelo que
-#         que treinei na minha máquina usando a versão do Python diferente da sua
-def carregar_classificador(usar_wandb=True):
-    if usar_wandb:
-        print('---- baixando dados do Wandb')
-        artefato = wandb.use_artifact('cleiane-projetos/intencao-dialogar/modelo:latest', type='modelo')
-        diretorio_download = artefato.download()
-        caminho_arquivo = os.path.join(diretorio_download, 'modelo_completo.pkl')
-        with open(caminho_arquivo, 'rb') as arq:
-            classificador = cloudpickle.load(arq)
-    else:
-        # AFAZER: considerar apagar esse arquivo também. Ele foi gerado usando Python 3.12.8
-        with open('pipeline-machine-learning/modelo_completo.pkl', 'rb') as arq:
-            classificador = cloudpickle.load(arq)
+# def classificador():
+#     global classificador
+#     if classificador is None:
+#         classificador = carregar_classificador()
+#     return classificador
+
+def carregar_classificador():
+    artefato = wandb.use_artifact('cleiane-projetos/intencao-dialogar/classificador:latest', type='modelo')
+    caminho = artefato.get_path("modelo_completo.pkl").download()
+    with open(caminho, 'rb') as arq:
+        classificador = cloudpickle.load(arq)
     return classificador
-
+    
 print('-- carregando classificador')
 classificador = carregar_classificador()
 
 print('Inicializando API')
-controller = FastAPI()
-
-print('-- definindo rotas')
+controller = FastAPI(title="API de Classificação de Intenção para o DIALOGAR da ALRN", version="1.0")
 
 @controller.get('/health/')
 async def health():
@@ -64,10 +52,16 @@ async def health():
         }
     }}
 
-@controller.get('/intencao/')
-async def classificar_intencao(texto: str = Query(..., description="Texto para classificar")):
+class TextoInput(BaseModel):
+    texto: str
+class IntencaoOutput(BaseModel):
+    intencao: str
+
+@controller.post('/intencao/', response_model=IntencaoOutput, summary="Classificar intenção", description="Classifica a intenção do texto enviado.")
+async def classificar_intencao(payload: TextoInput):
     try:
-        resultado = classificador.predict(pd.Series([texto]))[0]
+        resultado = classificador.predict(pd.Series([payload.texto]))[0]
+        print(f"Dado: {payload.texto} . Classificação: {resultado}")
         return {"intencao": resultado}
     except Exception as e:
         return {"erro": str(e)}

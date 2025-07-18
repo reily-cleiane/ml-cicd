@@ -1,0 +1,17 @@
+Criar ambiente virtual:
+python -m venv <nome-do-ambiente-à-sua-escolha>
+
+usar o ambiente virtual
+source ./<nome-do-ambiente>/bin/activate
+
+instalar requirements
+pip install -r requirements.txt
+
+iniciar fastapi
+uvicorn nome_api_sem_py:controller
+
+http://localhost:8000/docs → visualização Swagger UI
+http://localhost:8000/redoc → visualização ReDoc
+
+rodar testes
+pytest test_api.py

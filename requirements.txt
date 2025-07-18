@@ -13,3 +13,5 @@ xgboost
 sentence-transformers
 joblib
 cloudpickle
+pytest
+httpx
